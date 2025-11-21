@@ -1,0 +1,28 @@
+# LLM SDKs
+anthropic>=0.40.0
+google-generativeai>=0.8.0
+
+# Environment & Configuration
+python-dotenv>=1.0.0
+
+# Data Validation
+pydantic>=2.0.0
+
+# Web Scraping & Search
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+playwright>=1.40.0
+google-search-results>=2.4.2  # SerpAPI
+openai>=1.0.0  # Perplexity API (OpenAI-compatible)
+
+# Terminal UI
+rich>=13.0.0
+prompt_toolkit>=3.0.0
+
+# Utilities
+python-dateutil>=2.8.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0

@@ -1,0 +1,27 @@
+{
+  "name": "product-review-agent",
+  "version": "1.0.0",
+  "description": "Product review application using Claude Agent SDK",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/main.js",
+    "dev": "ts-node src/main.ts",
+    "watch": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "keywords": ["claude", "agent", "product-review", "ai"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.38.0",
+    "axios": "^1.7.9",
+    "dotenv": "^16.4.7",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2"
+  }
+}
