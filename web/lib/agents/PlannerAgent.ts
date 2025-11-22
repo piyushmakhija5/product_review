@@ -304,6 +304,24 @@ Format:
     return this.questionCount;
   }
 
+  getConversationHistory(): Anthropic.MessageParam[] {
+    return [...this.conversationHistory];
+  }
+
+  restoreState(state: {
+    conversationHistory: Anthropic.MessageParam[];
+    requirements?: UserRequirements;
+    questionCount?: number;
+  }): void {
+    this.conversationHistory = state.conversationHistory || [];
+    if (state.requirements) {
+      this.requirements = state.requirements;
+    }
+    if (state.questionCount !== undefined) {
+      this.questionCount = state.questionCount;
+    }
+  }
+
   reset(): void {
     this.conversationHistory = [];
     this.requirements = this.createEmptyRequirements();

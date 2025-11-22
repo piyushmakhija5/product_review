@@ -3,29 +3,33 @@ import { PlannerAgent } from '@/lib/agents/PlannerAgent';
 import { ResearchAgent } from '@/lib/agents/ResearchAgent';
 import { AnalyzerAgent } from '@/lib/agents/AnalyzerAgent';
 import { RecommendationAgent } from '@/lib/agents/RecommendationAgent';
-import type { UserRequirements } from '@/lib/types';
+import { sessionStore, SessionData } from '@/lib/stores/SessionStore';
 
-// Store agent instances and session data per session
-interface SessionData {
-  plannerAgent: PlannerAgent;
-  requirements?: UserRequirements;
-  researchResults?: any;
-  searchQueries?: string[];
-}
+async function getOrCreateSession(sessionId: string) {
+  let existing = await sessionStore.get(sessionId);
 
-const agentSessions = new Map<string, SessionData>();
-
-function getOrCreateSession(sessionId: string): SessionData {
-  if (!agentSessions.has(sessionId)) {
+  if (!existing) {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       throw new Error('ANTHROPIC_API_KEY not configured');
     }
-    agentSessions.set(sessionId, {
-      plannerAgent: new PlannerAgent(apiKey),
-    });
+
+    const plannerAgent = new PlannerAgent(apiKey);
+    const sessionData: SessionData = {
+      sessionId,
+      phase: 'planning',
+      createdAt: Date.now(),
+      lastActivityAt: Date.now(),
+    };
+
+    await sessionStore.set(sessionId, sessionData, plannerAgent);
+    existing = { data: sessionData, agent: plannerAgent };
+  } else {
+    // Update activity timestamp
+    await sessionStore.updateActivity(sessionId);
   }
-  return agentSessions.get(sessionId)!;
+
+  return existing;
 }
 
 export async function POST(request: NextRequest) {
@@ -39,14 +43,14 @@ export async function POST(request: NextRequest) {
     console.log('  User message:', message);
     console.log('  Auto-continue:', message === '[AUTO_CONTINUE]');
 
-    const session = getOrCreateSession(sessionId);
+    const session = await getOrCreateSession(sessionId);
     let response = '';
     let newPhase = phase;
 
     if (phase === 'planning') {
       // Use REAL PlannerAgent
       console.log('🤖 Calling PlannerAgent (Claude)...');
-      const result = await session.plannerAgent.chat(message);
+      const result = await session.agent.chat(message);
 
       response = result.conversation;
 
@@ -62,27 +66,34 @@ export async function POST(request: NextRequest) {
         newPhase = 'researching';
 
         // Store requirements for next phase
-        session.requirements = session.plannerAgent.getFinalRequirements();
-        console.log('  Final requirements:', session.requirements);
+        session.data.requirements = session.agent.getFinalRequirements();
+        console.log('  Final requirements:', session.data.requirements);
 
         // Generate search queries immediately so UI can show them
         const apiKey = process.env.ANTHROPIC_API_KEY!;
         const researchAgent = new ResearchAgent(apiKey);
         try {
-          const queries = await researchAgent.generateSearchQueries(session.requirements);
-          session.searchQueries = queries;
+          const queries = await researchAgent.generateSearchQueries(session.data.requirements);
+          session.data.searchQueries = queries;
           console.log('  Generated search queries:', queries);
         } catch (error) {
           console.error('  Failed to generate queries:', error);
-          session.searchQueries = [];
+          session.data.searchQueries = [];
         }
+
+        // Update session in store
+        session.data.phase = newPhase;
+        await sessionStore.set(sessionId, session.data, session.agent);
 
         // Add a personal touch to the transition message
         response += "\n\nPerfect! Let me search for the best options. I'll check with my favorite retailers and find you some great deals.";
+      } else {
+        // Save updated agent state
+        await sessionStore.set(sessionId, session.data, session.agent);
       }
     } else if (phase === 'researching' && message === '[AUTO_CONTINUE]') {
       // Use REAL ResearchAgent
-      if (!session.requirements) {
+      if (!session.data.requirements) {
         throw new Error('No requirements available for research');
       }
 
@@ -95,7 +106,7 @@ export async function POST(request: NextRequest) {
       }
 
       const researchAgent = new ResearchAgent(apiKey);
-      const researchResult = await researchAgent.research(session.requirements);
+      const researchResult = await researchAgent.research(session.data.requirements);
 
       console.log('  Research result:', {
         productsFound: researchResult.products_found?.length || 0,
@@ -108,16 +119,18 @@ export async function POST(request: NextRequest) {
       const unknownCount = researchResult.unknown_unknowns?.length || 0;
 
       response = `Great news! I found ${productCount} excellent options for you across Amazon, Best Buy, Walmart, and other retailers. ${unknownCount > 0 ? `I also discovered ${unknownCount} important ${unknownCount === 1 ? 'factor' : 'factors'} you might want to consider.` : ''}\n\nLet me take a closer look at these and put together my recommendations...`;
-      session.researchResults = researchResult;
+      session.data.researchResults = researchResult;
       // Update search queries from actual research if they weren't set earlier
-      if (!session.searchQueries || session.searchQueries.length === 0) {
-        session.searchQueries = researchResult.search_queries_used || [];
+      if (!session.data.searchQueries || session.data.searchQueries.length === 0) {
+        session.data.searchQueries = researchResult.search_queries_used || [];
       }
 
       newPhase = 'analyzing';
+      session.data.phase = newPhase;
+      await sessionStore.set(sessionId, session.data, session.agent);
     } else if (phase === 'analyzing' && message === '[AUTO_CONTINUE]') {
       // Use AnalyzerAgent + RecommendationAgent
-      if (!session.requirements || !session.researchResults) {
+      if (!session.data.requirements || !session.data.researchResults) {
         throw new Error('No research results available for analysis');
       }
 
@@ -126,8 +139,8 @@ export async function POST(request: NextRequest) {
       const analyzerAgent = new AnalyzerAgent(apiKey);
 
       const analysisResult = await analyzerAgent.analyzeProducts(
-        session.requirements,
-        session.researchResults
+        session.data.requirements,
+        session.data.researchResults
       );
 
       console.log('  Analysis complete:', {
@@ -140,7 +153,7 @@ export async function POST(request: NextRequest) {
       const recommendationAgent = new RecommendationAgent(apiKey);
 
       const recommendation = await recommendationAgent.generateRecommendation(
-        session.requirements,
+        session.data.requirements,
         analysisResult
       );
 
@@ -150,6 +163,8 @@ export async function POST(request: NextRequest) {
       console.log(`  Generated ${recommendation.messages.length} recommendation messages`);
 
       newPhase = 'complete';
+      session.data.phase = newPhase;
+      await sessionStore.set(sessionId, session.data, session.agent);
     }
 
     // Ensure response is never empty
@@ -166,7 +181,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       response,
       phase: newPhase,
-      searchQueries: session.searchQueries || [],
+      searchQueries: session.data.searchQueries || [],
     });
   } catch (error) {
     console.error('❌ API error:', error);
